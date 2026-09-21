@@ -9,6 +9,7 @@ import structured_server as S
 
 SEEN = []
 CONF = [0.7]  # first-label probability the fake returns at every slot
+LEAK = [0.0]  # probability the fake diverts to a non-label token (label_mass < 1)
 THOUGHT = None  # token ids the fake writes when asked to think
 
 class Fake(BaseHTTPRequestHandler):
@@ -45,7 +46,8 @@ class Fake(BaseHTTPRequestHandler):
         for pos, tid in enumerate(canvas[:req["max_tokens"]]):
             top = [{"token": f"token_id:{tid}", "logprob": -0.01}]
             for ids in FAMILIES:
-                p = [CONF[0]] + [(1 - CONF[0]) / (len(ids) - 1)] * (len(ids) - 1)
+                mass = 1 - LEAK[0]
+                p = [CONF[0] * mass] + [(1 - CONF[0]) * mass / (len(ids) - 1)] * (len(ids) - 1)
                 top += [{"token": f"token_id:{i}", "logprob": math.log(pi)} for i, pi in zip(ids, p)]
             content.append({"token": f"token_id:{tid}", "logprob": -0.01, "top_logprobs": top})
         if self.path.endswith("/v1/completions"):
@@ -109,6 +111,18 @@ for conf, want in [(0.7, 4), (0.999, 1)]:
     assert all(len(dq[q]["entropy"]) == want for q in dq)
     assert out["diagnostics"]["samples"]["policy"]["first_read_entropy"] == {q: dq[q]["entropy"][0] for q in dq}
 CONF[0] = 0.7
+
+# auto policy again, but with mass outside the label set (as vLLM sends when
+# part of the top-k spells out an option name, <eos>, punctuation, ...): a
+# confident label distribution must still stop at one read. entropy computed
+# over the raw, unrenormalised label probabilities would put every read here
+# over auto_threshold and always take the max, regardless of CONF.
+SEEN.clear(); CONF[0] = 0.99; LEAK[0] = 0.3
+code, d = post({"messages": [{"role": "system", "content": json.dumps(auto)}, {"role": "user", "content": "{}"}]})
+out = json.loads(d["choices"][0]["message"]["content"])
+print("auto with label_mass < 1:", out["diagnostics"]["samples"]["policy"], "reads", len(SEEN))
+assert out["diagnostics"]["samples"]["n"] == 1 and len(SEEN) == 1, "a confident label distribution must not reread just because mass sits outside the label set"
+CONF[0] = 0.7; LEAK[0] = 0.0
 
 # think: one generation in the thought channel, then reads that carry it in their prompt
 SEEN.clear()

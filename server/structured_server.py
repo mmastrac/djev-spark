@@ -416,17 +416,21 @@ def slot_distribution(top, label_ids):
     """Label probabilities at one slot from the returned logprobs: every
     label's own value plus the argmax token. Read-only logprobs are at
     temperature 1, so the label softmax uses them directly. The entropy is
-    over that returned set."""
+    over the label distribution after renormalising (``probs``), not the
+    raw label_mass: H_raw = label_mass * H(probs) - label_mass * ln(label_mass)
+    would otherwise stay above a small auto_threshold almost regardless of
+    how sure the model is between labels, since label_mass < 1 whenever the
+    model spends any probability on spelling out an option name, an <eos>/
+    <turn|> token, or punctuation instead of the bare label token."""
     floor = min(top.values()) - 5.0
     lp_t = [top.get(i, floor) for i in label_ids]
     mx = max(lp_t)
     ex = [math.exp(x - mx) for x in lp_t]
     probs = [e / sum(ex) for e in ex]
-    top_p = [math.exp(v) for v in top.values()]
     return {
         "probs": probs,
         "label_mass": sum(math.exp(x) for x in lp_t),
-        "entropy": -sum(p * math.log(p) for p in top_p if p > 0),
+        "entropy": -sum(p * math.log(p) for p in probs if p > 0),
         "argmax_is_label": max(top, key=top.get) in label_ids,
     }
 
