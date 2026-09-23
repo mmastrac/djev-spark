@@ -347,7 +347,8 @@ Same with `MAX_NUM_BATCHED_TOKENS=32768`: 38,448 tokens 30.18 / 0.23 s,
 
 - `scripts/self-test.sh`: the server's fake-upstream test inside the image.
   Needs the checkpoint for its tokenizer, no GPU.
-- `scripts/smoke.sh`: one generation on 8010, one decision on 8011.
+- `scripts/smoke.sh`: one generation on 8010, one decision on 8011. It reads
+  `API_KEY` from the shell or the Compose `.env` file for the structured request.
 - `scripts/long-context-probe.py [tokens ...]`: cold and warm decision
   latency over states of the given sizes.
 
