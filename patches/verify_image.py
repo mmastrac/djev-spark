@@ -46,7 +46,7 @@ for module, needle, what in (
     ("vllm.utils.diffusion", "diffusion_constrained", "constrained-vocab"),
     ("vllm.utils.diffusion", "diffusion_samples", "diffusion-samples"),
     ("vllm.v1.attention.backends.flashinfer", "_plan_split_prefill", "flashinfer-per-request-causal"),
-    ("vllm.model_executor.models.diffusion_gemma_sampler", "safe_m", "fused-sampler-masked-block"),
+    ("vllm.model_executor.models.diffusion_gemma_sampler", "safe_m", "fused-sampler (masked-block fix)"),
 ):
     if needle not in source(module):
         problems.append(f"{module} lacks {needle}: {what} did not take")

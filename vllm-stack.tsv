@@ -5,8 +5,7 @@
 # the fork and upstream; see docs/vllm-stack.md.
 constrained-vocab	e30956321d9858f02cfdcdf68a578561659dca28	58216
 sc-last-step-skip	97217d7605286c89ceb64747151594e11ca89719	58221
-fused-sampler	a468cbb8fd8871727012ffd51096c200b0dacee7	58226
-fused-sampler-masked-block	e5b26fdd216d8f9cfce8f6eeeba0ed63461b7bd3	58226	fused-sampler
+fused-sampler	e5b26fdd216d8f9cfce8f6eeeba0ed63461b7bd3	58226
 diffusion-entropy-masked	16ccbabdd0758e1622c9d7423faf76ac221a5186	58440
 diffusion-samples	c9a788a1eb1ca8575e644ce928b47d8ebf246a15	58438
 flashinfer-per-request-causal	64d1f40abb7617c69b499ff3748a3840e6a3e80a	-

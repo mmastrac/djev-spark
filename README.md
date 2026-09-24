@@ -319,7 +319,7 @@ turns four requests into one.
 Plain generation, 256 tokens max, single stream: 79 to 87 tok/s, within
 run-to-run noise of the same branches on the older nightly they were
 developed on. `top_k=20, top_p=0.95` runs at the same speed as neither
-(before `fused-sampler-masked-block` it returned NaN logprobs and an empty
+(before the last `fused-sampler` commit it returned NaN logprobs and an empty
 answer).
 
 ### Previous image

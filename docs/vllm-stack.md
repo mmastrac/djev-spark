@@ -2,7 +2,7 @@
 
 Structured reads are upstream ([vllm-project/vllm#57250](https://github.com/vllm-project/vllm/pull/57250),
 merged 2026-09-22), so a stock nightly serves this image's reads. The image
-adds seven perf branches and one fix from [mmastrac/vllm](https://github.com/mmastrac/vllm)
+adds seven perf branches from [mmastrac/vllm](https://github.com/mmastrac/vllm)
 on top. [`vllm-stack.tsv`](../vllm-stack.tsv) lists them with the fork head each
 one is pinned at. The Dockerfile's `VLLM_REF` is the fork branch
 `djev-spark-stack`: the nightly's own commit plus each branch's feature diff.
@@ -11,8 +11,7 @@ one is pinned at. The Dockerfile's `VLLM_REF` is the fork branch
 |---|---|---|
 | `constrained-vocab` | [58216](https://github.com/vllm-project/vllm/pull/58216) | reads over `logprob_token_ids` only (`diffusion_constrained`). The unembedding, sampler and self-conditioning run over the K labels instead of the whole vocabulary: the same argmax for about a quarter less GPU time per read |
 | `sc-last-step-skip` | [58221](https://github.com/vllm-project/vllm/pull/58221) | skips the self-conditioning matmul on a read's last step, whose result no step would use |
-| `fused-sampler` | [58226](https://github.com/vllm-project/vllm/pull/58226) | one Triton pass per row for argmax, Gumbel sample, entropy and softmax, in `diffusion_gemma_sampler.py` |
-| `fused-sampler-masked-block` | for 58226 | a fix on `fused-sampler`: with `top_k` / `top_p` a whole leading block of the row is `-inf`, the kernel's running max stays `-inf`, and `-inf - -inf` turned the rest of the row into NaN. A `top_k=20` chat came back as NaN logprobs and an empty answer at the length cap. Belongs in 58226 |
+| `fused-sampler` | [58226](https://github.com/vllm-project/vllm/pull/58226) | one Triton pass per row for argmax, Gumbel sample, entropy and softmax, in `diffusion_gemma_sampler.py`. Its last commit keeps a row finite when `top_k` / `top_p` mask a whole leading block: the running max stayed `-inf`, and `-inf - -inf` made the rest of the row NaN |
 | `diffusion-entropy-masked` | [58440](https://github.com/vllm-project/vllm/pull/58440) | finite entropy when `top_k` / `top_p` leave `-inf` logits. Without it every block runs to its step cap, 4.4x slower |
 | `diffusion-samples` | [58438](https://github.com/vllm-project/vllm/pull/58438) | `diffusion_samples: k` fans one seeded canvas into k noise draws in one request, seedable, capped by `diffusion_config.max_samples` |
 | `flashinfer-per-request-causal` | none yet | FlashInfer takes the per-request causal tensor. It overlaps upstream PR 58015's `supports_mixed_causal()` gate |
