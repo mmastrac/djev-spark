@@ -1,4 +1,4 @@
-# One container: vLLM on :8010 with the structured-reads overlay, and the
+# One container: vLLM on :8010 with the perf overlay, and the
 # structured decision server on :8011 in front of it. Host network, so the
 # ports are the host's.
 #
@@ -26,7 +26,10 @@ services:
     environment:
       - MODEL=/models/${MODEL_NAME:-dgemma}
       - SERVED_NAME=${SERVED_NAME:-dgemma}
-      - CANVAS=${CANVAS:-128}
+      - CANVAS=${CANVAS:-256}
+      # Generation block width by load: [low, high, width] over running plus
+      # waiting requests. Widths must not exceed CANVAS; empty = CANVAS always.
+      - CANVAS_SCHEDULE=${CANVAS_SCHEDULE-[[1, 2, 256], [3, 6, 128], [7, 32, 64]]}
       - MAX_SEQS=${MAX_SEQS:-32}
       - MAX_MODEL_LEN=${MAX_MODEL_LEN:-4096}
       - GPU_UTIL=${GPU_UTIL:-0.40}
@@ -36,22 +39,34 @@ services:
       # Nonzero adds an HTTPS listener with a self-signed certificate, which
       # browsers need before they open a webcam for the playground.
       - TLS_PORT=${TLS_PORT:-0}
-      - EXTRA_ARGS=${EXTRA_ARGS:---async-scheduling}
+      - EXTRA_ARGS=${EXTRA_ARGS:-}
+      # 1 reads over the labels only; 1 sends a fixed sample count as one
+      # request. MAX_SAMPLES caps it, in the server and the engine.
+      - CONSTRAINED=${CONSTRAINED:-1}
+      - ENGINE_SAMPLES=${ENGINE_SAMPLES:-1}
+      - MAX_SAMPLES=${MAX_SAMPLES:-32}
+      # gemma4 strips the empty thought block from plain chat and parses
+      # tool calls. Empty turns either off.
+      - REASONING_PARSER=${REASONING_PARSER-gemma4}
+      - TOOL_CALL_PARSER=${TOOL_CALL_PARSER-gemma4}
       # KV pool in GiB, fixed rather than derived from GPU_UTIL. Size it to
       # MAX_MODEL_LEN times the requests that must fit at once.
       - KV_CACHE_GB=${KV_CACHE_GB:-2}
       # Empty keeps vLLM's default prefill chunk.
       - MAX_NUM_BATCHED_TOKENS=${MAX_NUM_BATCHED_TOKENS:-}
       - HEADROOM_GB=${HEADROOM_GB:-12}
+      # fp32 [MAX_SEQS x CANVAS, vocab] copies the start-up budget allows for.
+      - TRANSIENT_COPIES=${TRANSIENT_COPIES:-2}
       # Empty leaves the worker unbounded, as upstream. A fraction turns a
       # runaway allocation into a failed request instead of a hung host.
       - TORCH_MEM_FRACTION=${TORCH_MEM_FRACTION:-}
-      # 1 serves the playground page at / on the structured port.
+      # 1 serves the playground at /, and /walk and /cube, on the structured port.
       - TEST_PAGE=${TEST_PAGE:-}
       # When set, POST routes on the structured port need this bearer token.
       - API_KEY=${API_KEY:-}
       - VLLM_USE_V2_MODEL_RUNNER=1
-      - VLLM_PORT=5300
+      - VLLM_PORT=${VLLM_PORT:-5300}
+      - HF_HUB_OFFLINE=1
       # FlashInfer's JIT runs one compiler per unit by default and a single
       # cicc can pass 8 GB; bounded so the first start cannot OOM the box.
       - MAX_JOBS=${MAX_JOBS:-4}

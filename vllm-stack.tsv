@@ -1,0 +1,13 @@
+# The vLLM perf branches the image is built from, in merge order.
+# branch<TAB>fork head<TAB>upstream PR (- = none yet)[<TAB>parent branch].
+# A branch with a parent is a fix stacked on that branch and applies as its
+# diff from the parent's head. scripts/vllm-stack.sh checks each line against
+# the fork and upstream; see docs/vllm-stack.md.
+constrained-vocab	e30956321d9858f02cfdcdf68a578561659dca28	58216
+sc-last-step-skip	97217d7605286c89ceb64747151594e11ca89719	58221
+fused-sampler	a468cbb8fd8871727012ffd51096c200b0dacee7	58226
+fused-sampler-masked-block	e5b26fdd216d8f9cfce8f6eeeba0ed63461b7bd3	58226	fused-sampler
+diffusion-entropy-masked	16ccbabdd0758e1622c9d7423faf76ac221a5186	58440
+diffusion-samples	c9a788a1eb1ca8575e644ce928b47d8ebf246a15	58438
+flashinfer-per-request-causal	64d1f40abb7617c69b499ff3748a3840e6a3e80a	-
+adaptive-canvas	6fc8c5f97d80c1819ec801bf8b1da8ce53c7d2a8	-

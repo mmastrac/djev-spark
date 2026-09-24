@@ -3,40 +3,35 @@
 DiffusionGemma 26B-A4B (NVFP4) on a DGX Spark, serving structured decisions
 through Jev's API.
 
-One container runs vLLM with the structured-reads patches on port 8010 and
-the structured decision server on port 8011 in front of it. The server
-implements Jev's `POST /v1/systemone` API.
+One container runs vLLM on port 8010 and the structured decision server on
+port 8011 in front of it. The server is [mmastrac/djev](https://github.com/mmastrac/djev);
+it implements Jev's `POST /v1/systemone` API and passes ordinary chat through
+to vLLM.
 
-The engine patches are from [vllm-project/vllm#57250](https://github.com/vllm-project/vllm/pull/57250).
-The container builds from branch `structured-reads-spark` of
-[mmastrac/vllm](https://github.com/mmastrac/vllm/tree/structured-reads-spark), which
-combines the open PRs (https://github.com/vllm-project/vllm/pulls/mmastrac).
+Structured reads are upstream in vLLM
+([vllm-project/vllm#57250](https://github.com/vllm-project/vllm/pull/57250)).
+This image adds seven perf branches that are not upstream yet; see
+[docs/vllm-stack.md](docs/vllm-stack.md).
 
 ## Image
 
-- Base: `vllm/vllm-openai:nightly-dee37d89115db4c94a820a79a78a7828e141c910`,
-  vLLM 0.29.1rc1.dev347. It ships flashinfer 0.6.18.post1 with a prebuilt
-  kernel cache, so the engine starts in about 90 s with no JIT.
-- Overlay: `patches/overlay_vllm.py` copies the fork branch's changed
-  `vllm/` files (9 files) over the base's site-packages.
-- `patches/link_cuda_headers.sh`: links the CUDA headers and unversioned
-  `.so` names the base leaves out. FlashInfer's JIT needs them if it ever
-  runs. With the prebuilt kernel cache it has not.
-- `patches/raise_recompile_limit.py`: sets torch dynamo's recompile limit
-  to 64 for the sampler module. Each canvas width is one specialization
-  and the default of 8 is too small for normal use.
-- `patches/worker_memory_cap.py`, `patches/spark_mem_trace.py`: per-worker
-  memory cap, active only when `TORCH_MEM_FRACTION` is set. From a local
-  patch that is not upstream. It may be dropped later.
-- `server/structured_server.py`: the structured server, installed at
-  `/opt/dgemma/structured_server.py`. It is the fork's example server plus
-  the `/cube` page.
+| piece | from | pinned by |
+|---|---|---|
+| vLLM | `vllm/vllm-openai:nightly-e9757321`, vLLM 0.29.1rc1.dev573 | `BASE`, `VLLM_BASE` |
+| perf overlay (12 files under `vllm/`) | fork branch `djev-spark-stack`: the nightly's commit plus the branches in [`vllm-stack.tsv`](vllm-stack.tsv) | `VLLM_REF` |
+| structured server `/opt/dgemma/structured_server.py` | [mmastrac/djev](https://github.com/mmastrac/djev) | `DJEV_REF` |
+| test pages `/opt/dgemma/pages/` | `pages/` in this repo | |
+| `link_cuda_headers.sh` | this repo | links the CUDA headers and unversioned `.so` names the base leaves out, for FlashInfer's JIT |
+| `worker_memory_cap.py`, `spark_mem_trace.py` | this repo | a per-worker memory cap, armed only by `TORCH_MEM_FRACTION` |
 
-## Porting notes
+`patches/overlay_vllm.py` stops the build if the base's vLLM is not the
+stack's commit. `patches/verify_image.py` stops it if any branch's change is
+missing from the installed vLLM, a changed module does not import, or the
+server lacks a flag the entrypoint passes.
 
-To move to a newer engine: rebase the fork branch onto main, set `VLLM_REF`
-to its head, set `BASE` and `VLLM_BASE` to a nightly at or after that
-commit.
+`scripts/vllm-stack.sh status` reports, per branch, whether the fork moved
+and whether upstream merged the PR into the base nightly yet, which is when
+the branch leaves the stack.
 
 ## Requirements
 
@@ -46,7 +41,8 @@ It may work on other hardware. Reports are welcome.
 - Docker with the NVIDIA runtime and BuildKit.
 - 25 GB disk for the image, 18 GB for the checkpoint.
 - Memory: weights 19 GB, KV pool `KV_CACHE_GB`, plus a start-up transient
-  that scales with `MAX_SEQS x CANVAS`.
+  that scales with `MAX_SEQS x CANVAS` (`TRANSIENT_COPIES` sets the budget
+  for it).
 
 ## Run
 
@@ -232,11 +228,13 @@ frame, written with the frame in view and seeded into the read's canvas
 ahead of the answer. The canvas bounds the thought, so at 128 rows a
 request for more is clipped and `diagnostics.thought.budget` says to what.
 
-To reload the server code without restarting vLLM, copy the files into the
-container and kill the server process. The entrypoint restarts it.
+To reload the server or the pages without restarting vLLM, copy the files
+into the container and kill the server process. The entrypoint restarts it.
 
 ```bash
-docker cp server/. dgemma:/opt/dgemma/ && docker exec dgemma pkill -f structured_server.py
+docker cp ../djev/structured_server.py dgemma:/opt/dgemma/
+docker cp pages/. dgemma:/opt/dgemma/pages/
+docker exec dgemma pkill -f structured_server.py
 ```
 
 ### Cube Rule demo
@@ -254,8 +252,10 @@ is about a third of a second on the Spark.
 
 | route | what it does |
 |---|---|
-| `POST /v1/chat/completions` | The same decision as an OpenAI-shaped call. The system message is the schema JSON, the user message is the state JSON or image parts, and the reply `content` is the answer JSON. The schema is documented at the top of `server/structured_server.py`. |
-| `POST /v1/raw/chat/completions` | Passes the body to vLLM's chat completions unchanged: plain generation through the same port and, with `API_KEY`, the same token. |
+| `POST /v1/chat/completions` | A decision when the system message is a JSON object with `questions`: the user message is the state JSON or image parts, and the reply `content` is the answer JSON. The schema is documented at the top of djev's `structured_server.py`. Any other chat goes to vLLM unchanged, streaming and tool calls included. |
+| `POST /v1/raw/chat/completions` | Always passes the body to vLLM's chat completions unchanged: plain generation through the same port and, with `API_KEY`, the same token. |
+| other `POST /v1/...` | Passed to vLLM, for example `/v1/completions`. |
+| `GET /v1/models` | vLLM's model list; 503 until vLLM is up. |
 | `GET /health` | Always open, no token. |
 
 ## Configuration
@@ -266,17 +266,24 @@ Environment variables, same defaults in `compose.yaml` and `.env.example`.
 |---|---|---|
 | `MODELS_DIR`, `MODEL_NAME` | `./models`, `dgemma` | checkpoint at `$MODELS_DIR/$MODEL_NAME` |
 | `CACHE_DIR` | `./cache` | flashinfer autotune and torch compile cache |
-| `CANVAS` | 128 | served canvas in tokens. A read pays only for its own width |
+| `CANVAS` | 256 | served canvas in tokens. A read pays only for its own width |
+| `CANVAS_SCHEDULE` | `[[1, 2, 256], [3, 6, 128], [7, 32, 64]]` | generation block width by load, `[low, high, width]` over running plus waiting requests. No width may exceed `CANVAS`; empty uses `CANVAS` for every block |
 | `MAX_SEQS` | 32 | concurrent requests |
 | `MAX_MODEL_LEN` | 4096 | prompt plus canvas |
 | `GPU_UTIL` | 0.40 | fraction of box memory vLLM plans for |
 | `KV_CACHE_GB` | 2 | KV pool, fixed |
 | `MAX_NUM_BATCHED_TOKENS` | empty | prefill chunk (empty = vLLM default) |
 | `ATTN` | TRITON_ATTN | attention backend |
-| `EXTRA_ARGS` | `--async-scheduling` | appended to `vllm serve` |
+| `EXTRA_ARGS` | empty | appended to `vllm serve` |
+| `CONSTRAINED` | 1 | reads over the labels only (`--constrained`) |
+| `ENGINE_SAMPLES` | 1 | a fixed sample count as one `diffusion_samples` request (`--engine-samples`) |
+| `MAX_SAMPLES` | 32 | cap on samples per question, in the server and the engine |
+| `REASONING_PARSER` | gemma4 | strips the empty thought block from plain chat; empty turns it off |
+| `TOOL_CALL_PARSER` | gemma4 | tool calls in every `tool_choice` mode; empty turns them off |
 | `HEADROOM_GB` | 12 | free memory required beyond weights, KV and transient |
+| `TRANSIENT_COPIES` | 2 | fp32 `[MAX_SEQS x CANVAS, vocab]` copies the start-up budget allows for |
 | `TORCH_MEM_FRACTION` | empty | per-worker cap (empty = unbounded) |
-| `TEST_PAGE` | empty | `1` serves the playground page at `/` on the structured port |
+| `TEST_PAGE` | empty | `1` serves the playground at `/`, and `/walk` and `/cube`, on the structured port |
 | `TLS_PORT` | 0 | nonzero adds an HTTPS listener with a self-signed certificate. Browsers need it to open a webcam from another device |
 | `API_KEY` | empty | when set, POST routes on the structured port need `Authorization: Bearer <key>` |
 | `PORT`, `STRUCTURED_PORT` | 8010, 8011 | host network |
@@ -286,8 +293,40 @@ KV_CACHE_GB=24 GPU_UTIL=0.45`.
 
 ## Benchmarks
 
-All on one GX10 (GB10, 121 GB), 2026-09-18, this image, nothing else
-running. Engine init 88 to 93 s.
+### This image
+
+One GX10 (GB10, 121 GB), 2026-09-24, defaults (`CANVAS=256` with the
+adaptive schedule, `MAX_SEQS=32`, `MAX_MODEL_LEN=4096`, `KV_CACHE_GB=2`).
+Another DiffusionGemma container shared the GPU but was idle during each
+run, checked by its request counter. Engine init 67 s cold (weights 116 s
+before it), 11 s warm. The container peaked at 33 GB of host memory during
+start-up and 30 GB under load.
+
+The perf branches' server side, on against off, same engine, runs
+alternated, a unique three-question state per request, 12 s per run,
+median of three:
+
+| samples | clients | `--constrained --engine-samples` | neither | gain |
+|---|---|---|---|---|
+| 1 | 1 | 10.9 req/s | 10.0 req/s | 1.09x |
+| 1 | 32 | 77.6 req/s (233 decisions/s) | 71.6 req/s | 1.08x |
+| 4 | 1 | 8.3 req/s | 5.5 req/s | 1.50x |
+| 4 | 32 | 31.9 req/s | 24.0 req/s | 1.33x |
+
+With one sample only `--constrained` applies; with four, `--engine-samples`
+turns four requests into one.
+
+Plain generation, 256 tokens max, single stream: 79 to 87 tok/s, within
+run-to-run noise of the same branches on the older nightly they were
+developed on. `top_k=20, top_p=0.95` runs at the same speed as neither
+(before `fused-sampler-masked-block` it returned NaN logprobs and an empty
+answer).
+
+### Previous image
+
+The structured-reads fork overlay before the feature went upstream, no perf
+branches, `CANVAS=128`. All on one GX10, 2026-09-18, nothing else running.
+Engine init 88 to 93 s.
 
 KV cache at `MAX_MODEL_LEN=131072 KV_CACHE_GB=24`: 1,808,085 tokens,
 13.79 x 128k requests (about 1.7 GiB per 128k request, since 25 of 30
@@ -345,8 +384,8 @@ Same with `MAX_NUM_BATCHED_TOKENS=32768`: 38,448 tokens 30.18 / 0.23 s,
 
 ## Tests
 
-- `scripts/self-test.sh`: the server's fake-upstream test inside the image.
-  Needs the checkpoint for its tokenizer, no GPU.
+- The build runs `patches/verify_image.py`: every perf branch present, the
+  changed modules import, the server has the flags the entrypoint passes.
 - `scripts/smoke.sh`: one generation on 8010, one decision on 8011.
 - `scripts/long-context-probe.py [tokens ...]`: cold and warm decision
   latency over states of the given sizes.
@@ -354,22 +393,22 @@ Same with `MAX_NUM_BATCHED_TOKENS=32768`: 38,448 tokens 30.18 / 0.23 s,
 ## Files
 
 ```
-Dockerfile                      base + fork engine overlay + patches + server
+Dockerfile                      base + perf overlay + djev server + patches
+vllm-stack.tsv                  the perf branches, pinned heads and upstream PRs
 compose.yaml                    one service, host network
 entrypoint.sh                   memory guard, vllm serve, structured server
 .env.example
+docs/vllm-stack.md              the stack: what each branch does, how to keep it current
 patches/link_cuda_headers.sh
 patches/overlay_vllm.py
-patches/raise_recompile_limit.py
+patches/verify_image.py
 patches/worker_memory_cap.py
 patches/spark_mem_trace.py
+pages/index.html                the playground
+pages/walk.html
+pages/cube.html
+scripts/vllm-stack.sh           status of the perf branches; build a new stack
 scripts/download-model.sh
 scripts/smoke.sh
-scripts/self-test.sh
 scripts/long-context-probe.py
-server/structured_server.py
-server/playground.html
-server/walk.html
-server/cube.html
-server/test_structured_server.py
 ```

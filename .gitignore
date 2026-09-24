@@ -4,3 +4,4 @@ cache/
 __pycache__/
 *.log
 *.bak*
+.vllm-stack/
