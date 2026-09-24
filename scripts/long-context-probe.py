@@ -4,14 +4,16 @@ and the server's KV usage. Run against a server started with MAX_MODEL_LEN
 above N.
 
 usage: long-context-probe.py [tokens ...]   (default 8000 32000 100000)
+PORT and STRUCTURED_PORT override the ports, as in smoke.sh.
 """
 import json
+import os
 import sys
 import time
 import urllib.request
 
-STRUCTURED = "http://127.0.0.1:8011"
-VLLM = "http://127.0.0.1:8010"
+STRUCTURED = f"http://127.0.0.1:{os.environ.get('STRUCTURED_PORT', '8011')}"
+VLLM = f"http://127.0.0.1:{os.environ.get('PORT', '8010')}"
 QUESTIONS = {
     "topic": {"type": "choice", "instructions": "What is the document about?",
               "criteria": {"shipping logistics": None, "a software incident": None, "a cooking recipe": None, "a court ruling": None}},

@@ -293,94 +293,61 @@ KV_CACHE_GB=24 GPU_UTIL=0.45`.
 
 ## Benchmarks
 
-### This image
+One GX10 (GB10, 121 GB), 2026-09-24, with nothing else running on the box.
+Defaults: `CANVAS=256` with the adaptive schedule, `MAX_SEQS=32`,
+`MAX_MODEL_LEN=4096`, `KV_CACHE_GB=2` (18,995 tokens), `TRITON_ATTN`.
 
-One GX10 (GB10, 121 GB), 2026-09-24, defaults (`CANVAS=256` with the
-adaptive schedule, `MAX_SEQS=32`, `MAX_MODEL_LEN=4096`, `KV_CACHE_GB=2`).
-Another DiffusionGemma container shared the GPU but was idle during each
-run, checked by its request counter. Engine init 67 s cold (weights 116 s
-before it), 11 s warm. The container peaked at 33 GB of host memory during
-start-up and 30 GB under load.
+Start-up with a warm cache: 172 s to serving, 136 s of it loading weights and
+11 s engine init. The container used at most 29 GB of host memory.
 
-The perf branches' server side, on against off, same engine, runs
-alternated, a unique three-question state per request, 12 s per run,
-median of three:
+Structured reads, `scripts/read-curve.py`: a unique three-question state
+(yes/no, choice, score) per request, 15 s per point.
 
-| samples | clients | `--constrained --engine-samples` | neither | gain |
+| samples | clients | req/s | decisions/s | p50 s | p95 s |
+|---|---|---|---|---|---|
+| 1 | 1 | 9.58 | 28.7 | 0.10 | 0.11 |
+| 1 | 8 | 37.45 | 112.3 | 0.21 | 0.23 |
+| 1 | 16 | 60.72 | 182.2 | 0.26 | 0.29 |
+| 1 | 32 | 87.74 | 263.2 | 0.36 | 0.45 |
+| 4 | 1 | 7.86 | 23.6 | 0.12 | 0.17 |
+| 4 | 32 | 28.16 | 84.5 | 1.13 | 1.15 |
+
+Plain generation, `scripts/gen-bench.py`: 200-token completions (every
+request ran to the cap), completion tokens per second of wall time.
+
+| concurrent | tok/s | req/s | mean s per request |
+|---|---|---|---|
+| 1 | 94.4 | 0.47 | 2.12 |
+| 4 | 144.4 | 0.72 | 4.73 |
+| 8 | 210.3 | 1.05 | 6.84 |
+| 16 | 261.2 | 1.31 | 10.63 |
+| 32 | 302.5 | 1.51 | 18.26 |
+
+The first request at a new canvas width or batch size compiles once; both
+scripts warm up before timing.
+
+Two changes that looked like headroom, measured the same way, one run each:
+
+| | reads, 1 sample, 32 clients | reads, 4 samples, 32 clients | generation, 1 / 8 / 32 concurrent | start-up cost |
 |---|---|---|---|---|
-| 1 | 1 | 10.9 req/s | 10.0 req/s | 1.09x |
-| 1 | 32 | 77.6 req/s (233 decisions/s) | 71.6 req/s | 1.08x |
-| 4 | 1 | 8.3 req/s | 5.5 req/s | 1.50x |
-| 4 | 32 | 31.9 req/s | 24.0 req/s | 1.33x |
+| defaults | 87.7 req/s | 28.2 req/s | 94 / 210 / 302 tok/s | |
+| CUDA graphs captured to 2048 tokens (default 512) | 85.2 | 28.9 | 87 / 212 / 314 | +20 s capture, +1 GiB |
+| `ATTN=FLASHINFER` | 85.3 | 28.2 | 96 / 208 / 290 | +90 s engine init |
 
-With one sample only `--constrained` applies; with four, `--engine-samples`
-turns four requests into one.
+Neither is outside run-to-run noise, so the defaults stay. FlashInfer works
+here only because of the `flashinfer-per-request-causal` branch.
 
-Plain generation, 256 tokens max, single stream: 79 to 87 tok/s, within
-run-to-run noise of the same branches on the older nightly they were
-developed on. `top_k=20, top_p=0.95` runs at the same speed as neither
-(before the last `fused-sampler` commit it returned NaN logprobs and an empty
-answer).
-
-### Previous image
-
-The structured-reads fork overlay before the feature went upstream, no perf
-branches, `CANVAS=128`. All on one GX10, 2026-09-18, nothing else running.
-Engine init 88 to 93 s.
-
-KV cache at `MAX_MODEL_LEN=131072 KV_CACHE_GB=24`: 1,808,085 tokens,
-13.79 x 128k requests (about 1.7 GiB per 128k request, since 25 of 30
-layers are sliding-window 1024 and the hybrid allocator gives them only the
-window). Host memory free with the container up: 67 GB.
-
-Single reads, canvas width 32, sequential, medians of 15 (`vllm-patch/bench_read.py`):
-
-| case | median ms |
-|---|---|
-| read, no logprobs | 98.4 |
-| read, top5 logprobs | 101.7 |
-| read, long state (12x) | 93.2 |
-| read, same state every time (cached) | 103.9 |
-| read, 2 steps | 225.1 |
-| read, 3 steps | 282.0 |
-| commit path (not read-only) | 203.0 |
-| structured server, samples=1 | 104.3 |
-
-Concurrency, read-only single reads, canvas 32, unique state per request,
-15 s per level (`vllm-patch/curve.py`), `MAX_MODEL_LEN=131072 MAX_SEQS=32`:
-
-| clients | req/s | decisions/s | p50 s | p95 s |
-|---|---|---|---|---|
-| 1 | 8.54 | 25.6 | 0.12 | 0.12 |
-| 8 | 27.87 | 83.6 | 0.28 | 0.30 |
-| 16 | 41.41 | 124.2 | 0.38 | 0.42 |
-| 32 | 49.47 | 148.4 | 0.60 | 0.81 |
-
-Same curve with `MAX_SEQS=16`: 32 clients 42.89 req/s, p50 0.74 s.
-
-Previous build (vLLM 487ecf187 base, same patches, `MAX_MODEL_LEN=4096`,
-2026-09-17): 1 client 8.7 req/s, 8 clients 27.8, 32 clients 53.3 to 54.0.
-
-This image at `MAX_MODEL_LEN=4096 MAX_SEQS=32`: 1 client 8.29 req/s (p50
-0.12 s), 32 clients 53.37 req/s (160.1 decisions/s, p50 0.58 s, p95 0.79 s).
-The 32-client difference between the two tables comes from the model
-length: this image at 4096 matches the previous build.
-
-The first batch at a new tile width or batch size compiles once
-(8 concurrent cold: 7.7 s).
-
-Long states, 128k profile, one decision per state, cold then warm
-(`scripts/long-context-probe.py`):
+Long states, 128k profile (`MAX_MODEL_LEN=131072 KV_CACHE_GB=24
+GPU_UTIL=0.45`), `scripts/long-context-probe.py`: one two-question decision
+per state, cold and then warm (prefix cached). The KV pool holds 1,808,085
+tokens, 13.79 requests of 128k: 25 of the 30 layers are sliding-window, and
+the allocator gives them only the window.
 
 | state tokens | cold s | warm s |
 |---|---|---|
-| 8,678 | 5.42 | 0.14 |
-| 35,133 | 13.37 | 0.21 |
-| 110,707 | 104.94 | 0.44 |
-
-Same with `MAX_NUM_BATCHED_TOKENS=32768`: 38,448 tokens 30.18 / 0.23 s,
-110,707 tokens 147.79 / 0.51 s, and a KV pool of 413,955 tokens (3.16 x
-128k).
+| 8,678 | 2.61 | 0.13 |
+| 35,133 | 13.63 | 0.37 |
+| 121,927 | 131.50 | 0.50 |
 
 ## Tests
 
@@ -389,6 +356,7 @@ Same with `MAX_NUM_BATCHED_TOKENS=32768`: 38,448 tokens 30.18 / 0.23 s,
 - `scripts/smoke.sh`: one generation on 8010, one decision on 8011.
 - `scripts/long-context-probe.py [tokens ...]`: cold and warm decision
   latency over states of the given sizes.
+- `scripts/read-curve.py`, `scripts/gen-bench.py`: the benchmarks above.
 
 ## Files
 
@@ -411,4 +379,6 @@ scripts/vllm-stack.sh           status of the perf branches; build a new stack
 scripts/download-model.sh
 scripts/smoke.sh
 scripts/long-context-probe.py
+scripts/read-curve.py
+scripts/gen-bench.py
 ```
